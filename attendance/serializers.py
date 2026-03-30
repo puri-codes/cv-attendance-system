@@ -33,3 +33,17 @@ class AttendanceLogSerializer(serializers.ModelSerializer):
 class FaceRecognitionSerializer(serializers.Serializer):
     """Serializer for face recognition API input."""
     image = serializers.CharField(help_text='Base64-encoded image frame')
+    class_id = serializers.IntegerField(required=False, allow_null=True)
+    class_start_time = serializers.TimeField(
+        required=False,
+        input_formats=['%H:%M', '%H:%M:%S'],
+    )
+    threshold_time = serializers.TimeField(
+        required=False,
+        input_formats=['%H:%M', '%H:%M:%S'],
+    )
+    end_time = serializers.TimeField(
+        required=False,
+        input_formats=['%H:%M', '%H:%M:%S'],
+    )
+    initialize_absent = serializers.BooleanField(required=False, default=False)

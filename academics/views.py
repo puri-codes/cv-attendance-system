@@ -52,8 +52,8 @@ def admin_dashboard(request):
 @admin_required
 def faculty_list(request):
     faculties = Faculty.objects.annotate(
-        class_count=Count('classes'),
-        student_count=Count('students'),
+        class_count=Count('classes', distinct=True),
+        student_count=Count('students', distinct=True),
     )
     return render(request, 'academics/faculty_list.html', {'faculties': faculties})
 
@@ -182,7 +182,11 @@ def student_list(request):
     today = timezone.localdate()
     attendance_map = {}
     for att in Attendance.objects.filter(date=today, student__in=students):
-        attendance_map[att.student_id] = att.get_status_display()
+        attendance_map[att.student_id] = att.status
+
+    students = list(students)
+    for s in students:
+        s.today_status = attendance_map.get(s.id)
 
     faculties = Faculty.objects.all()
     classes = AcademicClass.objects.all()
@@ -191,7 +195,6 @@ def student_list(request):
         'students': students,
         'faculties': faculties,
         'classes': classes,
-        'attendance_map': attendance_map,
         'search': search,
         'selected_faculty': faculty_id,
         'selected_class': class_id,

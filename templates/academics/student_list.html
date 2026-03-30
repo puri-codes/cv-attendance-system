@@ -91,14 +91,11 @@
                 <td>{{ s.enrollment_year }}</td>
                 <td>{{ s.phone|default:"—" }}</td>
                 <td>
-                    {% with status=attendance_map|default_if_none:"" %}
-                    {% if s.id in attendance_map %}
-                    <span class="badge badge-{{ attendance_map|default_if_none:'' }}">{{ attendance_map|default:"—"
-                        }}</span>
+                    {% if s.today_status %}
+                    <span class="badge badge-{{ s.today_status }}">{{ s.today_status|title }}</span>
                     {% else %}
                     <span class="text-muted">—</span>
                     {% endif %}
-                    {% endwith %}
                 </td>
                 <td>
                     <div class="d-flex gap-1">
@@ -203,3 +200,4 @@ async function linkStudentsToUsers() {
 }
 </script>
 {% endblock %}
+

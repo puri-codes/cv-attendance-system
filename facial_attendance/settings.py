@@ -33,6 +33,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'accounts.middleware.BypassLoginMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -91,6 +92,11 @@ LOGIN_URL = '/accounts/login/'
 LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = '/accounts/login/'
 
+# Dev/demo auth bypass
+BYPASS_LOGIN = DEBUG and os.environ.get('BYPASS_LOGIN', '1') == '1'
+BYPASS_LOGIN_USERNAME = os.environ.get('BYPASS_LOGIN_USERNAME', 'admin')
+BYPASS_LOGIN_AUTO_CREATE_USER = os.environ.get('BYPASS_LOGIN_AUTO_CREATE_USER', '1') == '1'
+
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -102,6 +108,7 @@ REST_FRAMEWORK = {
 }
 
 # Attendance settings
+ATTENDANCE_CLASS_TIME = '09:00'      # Typical class start time
 ATTENDANCE_THRESHOLD_TIME = '10:00'  # After this time, mark as Late
 ATTENDANCE_CUTOFF_TIME = '12:00'     # After this, cannot mark via face recognition
 FACE_RECOGNITION_TOLERANCE = 0.5     # Lower = stricter matching

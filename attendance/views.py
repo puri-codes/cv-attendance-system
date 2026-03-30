@@ -26,6 +26,66 @@ from .face_utils import (
 )
 
 
+def _parse_time_setting(setting_name, fallback):
+    """Parse HH:MM / HH:MM:SS time from settings with a safe fallback."""
+    value = getattr(settings, setting_name, fallback)
+    for fmt in ('%H:%M', '%H:%M:%S'):
+        try:
+            return datetime.strptime(value, fmt).time()
+        except (TypeError, ValueError):
+            continue
+    return datetime.strptime(fallback, '%H:%M').time()
+
+
+def _resolve_attendance_window(validated_data):
+    """Resolve class/threshold/end times from request data or settings."""
+    class_start_time = validated_data.get('class_start_time') or _parse_time_setting(
+        'ATTENDANCE_CLASS_TIME', '09:00'
+    )
+    threshold_time = validated_data.get('threshold_time') or _parse_time_setting(
+        'ATTENDANCE_THRESHOLD_TIME', '10:00'
+    )
+    end_time = validated_data.get('end_time') or _parse_time_setting(
+        'ATTENDANCE_CUTOFF_TIME', '12:00'
+    )
+    return class_start_time, threshold_time, end_time
+
+
+def _initialize_absent_attendance(students, target_date, user, class_start_time, threshold_time, end_time):
+    """
+    Ensure every student has an attendance record for the day.
+    Unscanned students stay absent by default.
+    """
+    created_count = 0
+    marker = user if getattr(user, 'is_authenticated', False) else None
+    notes = (
+        f"Auto-absent initialized. Class: {class_start_time.strftime('%H:%M')}, "
+        f"Threshold: {threshold_time.strftime('%H:%M')}, End: {end_time.strftime('%H:%M')}"
+    )
+
+    for student in students:
+        attendance, created = Attendance.objects.get_or_create(
+            student=student,
+            date=target_date,
+            defaults={
+                'status': 'absent',
+                'marked_by': marker,
+                'notes': notes,
+            },
+        )
+        if created:
+            created_count += 1
+            AttendanceLog.objects.create(
+                attendance=attendance,
+                action='created',
+                new_status='absent',
+                changed_by=marker,
+                notes='Automatically marked absent until scanned.',
+            )
+
+    return created_count
+
+
 # ─── Face Recognition Login ──────────────────────────────────────
 
 def face_login(request):
@@ -62,12 +122,6 @@ def api_mark_attendance(request):
 
     # Detect faces
     face_locations = detect_faces(image_array)
-    if not face_locations:
-        return Response({
-            'faces_detected': 0,
-            'message': 'No faces detected',
-            'results': [],
-        })
 
     # Get all student encodings
     students_qs = Student.objects.filter(
@@ -381,6 +435,9 @@ def attendance_camera(request):
     return render(request, 'attendance/camera.html', {
         'classes': classes,
         'face_recognition_available': FACE_RECOGNITION_AVAILABLE,
+        'default_class_time': getattr(settings, 'ATTENDANCE_CLASS_TIME', '09:00'),
+        'default_threshold_time': getattr(settings, 'ATTENDANCE_THRESHOLD_TIME', '10:00'),
+        'default_end_time': getattr(settings, 'ATTENDANCE_CUTOFF_TIME', '12:00'),
     })
 
 
@@ -395,7 +452,17 @@ def api_recognize_face(request):
         return Response({'error': serializer.errors}, status=400)
 
     image_data = serializer.validated_data['image']
-    class_id = request.data.get('class_id')
+    class_id = serializer.validated_data.get('class_id')
+    initialize_absent = serializer.validated_data.get('initialize_absent', False)
+    class_start_time, threshold_time, end_time = _resolve_attendance_window(serializer.validated_data)
+
+    if initialize_absent and not class_id:
+        return Response({'error': 'class_id is required to initialize absent records.'}, status=400)
+
+    if not (class_start_time <= threshold_time <= end_time):
+        return Response({
+            'error': 'Invalid time window. Class time must be <= threshold time <= end time.'
+        }, status=400)
 
     # Decode image
     try:
@@ -408,20 +475,37 @@ def api_recognize_face(request):
 
     # Detect faces
     face_locations = detect_faces(image_array)
+
+    # Determine student scope
+    eligible_students_qs = Student.objects.filter(is_active=True)
+    if request.user.role == 'teacher':
+        eligible_students_qs = eligible_students_qs.filter(academic_class__teacher=request.user)
+    if class_id:
+        eligible_students_qs = eligible_students_qs.filter(academic_class_id=class_id)
+
+    today = timezone.localdate()
+    now = timezone.localtime().time()
+    created_absent_count = 0
+    if initialize_absent:
+        created_absent_count = _initialize_absent_attendance(
+            students=eligible_students_qs,
+            target_date=today,
+            user=request.user,
+            class_start_time=class_start_time,
+            threshold_time=threshold_time,
+            end_time=end_time,
+        )
+
     if not face_locations:
         return Response({
             'faces_detected': 0,
+            'auto_absent_created': created_absent_count,
             'message': 'No faces detected',
             'results': [],
         })
 
     # Get known encodings
-    students_qs = Student.objects.filter(
-        is_active=True,
-        face_encoding__isnull=False,
-    )
-    if class_id:
-        students_qs = students_qs.filter(academic_class_id=class_id)
+    students_qs = eligible_students_qs.filter(face_encoding__isnull=False)
 
     known_encodings = []
     known_ids = []
@@ -436,11 +520,6 @@ def api_recognize_face(request):
 
     # Process each detected face
     results = []
-    today = timezone.localdate()
-    now = timezone.localtime().time()
-    threshold_time = datetime.strptime(
-        getattr(settings, 'ATTENDANCE_THRESHOLD_TIME', '10:00'), '%H:%M'
-    ).time()
 
     h, w = image_array.shape[:2]
     
@@ -473,18 +552,66 @@ def api_recognize_face(request):
         if matched_id:
             student = Student.objects.get(id=matched_id)
 
+            if now > end_time:
+                detected_status = 'absent'
+            elif now > threshold_time:
+                detected_status = 'late'
+            else:
+                detected_status = 'present'
+
             # Check for duplicate
             attendance, created = Attendance.objects.get_or_create(
                 student=student,
                 date=today,
                 defaults={
-                    'status': 'present' if now <= threshold_time else 'late',
+                    'status': detected_status,
                     'check_in_time': now,
                     'marked_by': request.user,
                     'is_face_recognized': True,
                     'confidence': confidence,
+                    'notes': (
+                        f"Scanned within class window "
+                        f"({class_start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')})."
+                    ),
                 },
             )
+
+            was_updated = False
+            if not created and (
+                attendance.status == 'absent'
+                or (attendance.status == 'late' and detected_status == 'present')
+            ):
+                old_status = attendance.status
+                attendance.status = detected_status
+                attendance.check_in_time = now
+                attendance.marked_by = request.user
+                attendance.is_face_recognized = True
+                attendance.confidence = confidence
+                attendance.notes = (
+                    f"Updated by face scan at {now.strftime('%H:%M:%S')} "
+                    f"(threshold {threshold_time.strftime('%H:%M')}, end {end_time.strftime('%H:%M')})."
+                )
+                attendance.save(
+                    update_fields=[
+                        'status',
+                        'check_in_time',
+                        'marked_by',
+                        'is_face_recognized',
+                        'confidence',
+                        'notes',
+                        'updated_at',
+                    ]
+                )
+                was_updated = True
+
+                AttendanceLog.objects.create(
+                    attendance=attendance,
+                    action='updated',
+                    previous_status=old_status,
+                    new_status=attendance.status,
+                    changed_by=request.user,
+                    notes='Status updated by face recognition scan.',
+                )
 
             if created:
                 AttendanceLog.objects.create(
@@ -495,6 +622,8 @@ def api_recognize_face(request):
                     notes=f'Face recognized with {confidence}% confidence',
                 )
                 result_msg = f'{student.full_name} marked as {attendance.get_status_display()}'
+            elif was_updated:
+                result_msg = f'{student.full_name} updated to {attendance.get_status_display()}'
             else:
                 result_msg = f'{student.full_name} already marked for today'
 
@@ -505,7 +634,8 @@ def api_recognize_face(request):
                 'student_name': student.full_name,
                 'confidence': confidence,
                 'status': attendance.get_status_display(),
-                'already_marked': not created,
+                'attendance_status': attendance.status,
+                'already_marked': (not created and not was_updated),
                 'message': result_msg,
             })
         else:
@@ -517,6 +647,7 @@ def api_recognize_face(request):
 
     return Response({
         'faces_detected': len(face_locations),
+        'auto_absent_created': created_absent_count,
         'results': results,
     })
 
