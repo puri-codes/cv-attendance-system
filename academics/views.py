@@ -356,3 +356,24 @@ def student_delete(request, pk):
     return render(request, 'academics/confirm_delete.html', {
         'object': student, 'type': 'Student'
     })
+
+
+@login_required
+@admin_or_teacher_required
+def student_toggle_phone_flag(request, pk):
+    if request.method != 'POST':
+        return redirect('academics:student_list')
+
+    student = get_object_or_404(Student, pk=pk, is_active=True)
+    student.is_phone_flagged = not student.is_phone_flagged
+    student.save()
+
+    if student.is_phone_flagged:
+        messages.warning(request, f'Flagged guardian number for {student.full_name}.')
+    else:
+        messages.success(request, f'Removed wrong guardian-number flag for {student.full_name}.')
+
+    next_url = request.POST.get('next')
+    if next_url:
+        return redirect(next_url)
+    return redirect('academics:student_list')

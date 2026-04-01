@@ -89,7 +89,19 @@
                 <td>{{ s.academic_class.name }}</td>
                 <td>{{ s.faculty.name }}</td>
                 <td>{{ s.enrollment_year }}</td>
-                <td>{{ s.phone|default:"—" }}</td>
+                <td>
+                    <select class="filter-input" style="min-width: 210px; max-width: 260px;">
+                        <option value="student">
+                            Student: {% if s.phone %}{{ s.phone }}{% else %}—{% endif %}
+                        </option>
+                        <option value="guardian">
+                            Guardian: {% if s.guardian_phone %}{{ s.guardian_phone }}{% else %}—{% endif %}
+                        </option>
+                    </select>
+                    {% if s.is_phone_flagged %}
+                    <div class="text-danger" style="font-size:0.8rem;"><i class="fas fa-flag"></i> Wrong guardian number</div>
+                    {% endif %}
+                </td>
                 <td>
                     {% if s.today_status %}
                     <span class="badge badge-{{ s.today_status }}">{{ s.today_status|title }}</span>
@@ -99,6 +111,14 @@
                 </td>
                 <td>
                     <div class="d-flex gap-1">
+                        <form method="post" action="{% url 'academics:student_toggle_phone_flag' s.pk %}" style="display:inline;">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                            <button type="submit" class="btn btn-sm {% if s.is_phone_flagged %}btn-warning{% else %}btn-outline{% endif %}"
+                                title="{% if s.is_phone_flagged %}Unflag wrong guardian number{% else %}Flag wrong guardian number{% endif %}">
+                                <i class="fas fa-flag"></i>
+                            </button>
+                        </form>
                         <a href="{% url 'academics:student_edit' s.pk %}" class="btn btn-sm btn-outline" title="Edit"><i
                                 class="fas fa-edit"></i></a>
                         <a href="{% url 'academics:student_delete' s.pk %}" class="btn btn-sm btn-danger"

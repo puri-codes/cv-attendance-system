@@ -16,6 +16,36 @@
         {% csrf_token %}
         <div class="form-grid">
             {% for field in form %}
+            {% if field.name == 'phone_country_code' or field.name == 'guardian_phone_country_code' %}
+            {% elif field.name == 'phone' %}
+            <div class="form-group">
+                <label class="form-label" for="{{ field.id_for_label }}">Student Phone</label>
+                <div class="d-flex gap-1">
+                    {{ form.phone_country_code }}
+                    {{ field }}
+                </div>
+                {% if form.phone_country_code.errors %}
+                <span class="text-danger" style="font-size:0.8rem;">{{ form.phone_country_code.errors.0 }}</span>
+                {% endif %}
+                {% if field.errors %}
+                <span class="text-danger" style="font-size:0.8rem;">{{ field.errors.0 }}</span>
+                {% endif %}
+            </div>
+            {% elif field.name == 'guardian_phone' %}
+            <div class="form-group">
+                <label class="form-label" for="{{ field.id_for_label }}">Guardian Phone</label>
+                <div class="d-flex gap-1">
+                    {{ form.guardian_phone_country_code }}
+                    {{ field }}
+                </div>
+                {% if form.guardian_phone_country_code.errors %}
+                <span class="text-danger" style="font-size:0.8rem;">{{ form.guardian_phone_country_code.errors.0 }}</span>
+                {% endif %}
+                {% if field.errors %}
+                <span class="text-danger" style="font-size:0.8rem;">{{ field.errors.0 }}</span>
+                {% endif %}
+            </div>
+            {% else %}
             <div class="form-group">
                 <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
                 {% if field.name == 'profile_image' %}
@@ -35,6 +65,7 @@
                 <span class="text-muted" style="font-size:0.75rem;">{{ field.help_text }}</span>
                 {% endif %}
             </div>
+            {% endif %}
             {% endfor %}
         </div>
         <div class="form-actions">

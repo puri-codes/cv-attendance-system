@@ -13,7 +13,12 @@ class BypassLoginMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        if getattr(settings, 'BYPASS_LOGIN', False) and not request.user.is_authenticated:
+        bypass_paused = request.session.get('bypass_login_paused', False)
+        if (
+            getattr(settings, 'BYPASS_LOGIN', False)
+            and not bypass_paused
+            and not request.user.is_authenticated
+        ):
             user = self._get_bypass_user()
             if user:
                 login(request, user, backend='django.contrib.auth.backends.ModelBackend')

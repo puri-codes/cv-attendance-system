@@ -428,10 +428,21 @@ def api_link_students_to_users(request):
 # ─── Face Recognition Attendance ─────────────────────────────────
 
 @login_required
-@admin_or_teacher_required
 def attendance_camera(request):
-    """Live camera attendance page for marking student attendance."""
-    classes = AcademicClass.objects.select_related('faculty').all()
+    """Live camera page with role-based scope."""
+    if request.user.role == 'student':
+        return render(request, 'attendance/face_attendance.html', {
+            'face_recognition_available': FACE_RECOGNITION_AVAILABLE,
+        })
+
+    if request.user.role not in ['admin', 'teacher']:
+        messages.error(request, 'You do not have permission to access camera attendance.')
+        return redirect('home')
+
+    classes = AcademicClass.objects.select_related('faculty')
+    if request.user.role == 'teacher':
+        classes = classes.filter(teacher=request.user)
+
     return render(request, 'attendance/camera.html', {
         'classes': classes,
         'face_recognition_available': FACE_RECOGNITION_AVAILABLE,
@@ -658,15 +669,22 @@ def api_recognize_face(request):
 @admin_or_teacher_required
 def manual_attendance(request):
     """Mark attendance manually for a class."""
-    classes = AcademicClass.objects.select_related('faculty').all()
+    classes = AcademicClass.objects.select_related('faculty')
+    if request.user.role == 'teacher':
+        classes = classes.filter(teacher=request.user)
+
     students = []
     selected_class = None
     today = timezone.localdate()
     selected_date = request.GET.get('date', today.isoformat())
-
     class_id = request.GET.get('class_id')
+
+    if request.method == 'POST':
+        class_id = request.POST.get('class_id') or class_id
+        selected_date = request.POST.get('date', selected_date)
+
     if class_id:
-        selected_class = get_object_or_404(AcademicClass, pk=class_id)
+        selected_class = get_object_or_404(classes, pk=class_id)
         students = Student.objects.filter(
             academic_class=selected_class, is_active=True
         ).order_by('full_name')
@@ -688,14 +706,27 @@ def manual_attendance(request):
             })
         students = students_with_attendance
 
-    if request.method == 'POST' and class_id:
+    if request.method == 'POST' and selected_class:
         date_str = request.POST.get('date', today.isoformat())
         for key, value in request.POST.items():
             if key.startswith('status_'):
-                student_id = int(key.replace('status_', ''))
+                try:
+                    student_id = int(key.replace('status_', ''))
+                except ValueError:
+                    continue
+
                 if value in ['present', 'absent', 'late', 'informed']:
+                    try:
+                        student = Student.objects.get(
+                            pk=student_id,
+                            academic_class=selected_class,
+                            is_active=True,
+                        )
+                    except Student.DoesNotExist:
+                        continue
+
                     att, created = Attendance.objects.update_or_create(
-                        student_id=student_id,
+                        student=student,
                         date=date_str,
                         defaults={
                             'status': value,
@@ -712,7 +743,11 @@ def manual_attendance(request):
                         notes=f'Manually marked by {request.user.get_full_name()}',
                     )
         messages.success(request, 'Attendance saved successfully.')
-        return redirect(f'{request.path}?class_id={class_id}&date={date_str}')
+        return redirect(f'{request.path}?class_id={selected_class.pk}&date={date_str}')
+
+    if request.method == 'POST' and not selected_class:
+        messages.error(request, 'Please select a valid class.')
+        return redirect('attendance:manual')
 
     return render(request, 'attendance/manual.html', {
         'classes': classes,
@@ -913,16 +948,17 @@ def daily_report(request):
         'student', 'student__academic_class', 'student__faculty', 'marked_by'
     )
 
+    teacher_classes = None
+    if request.user.role == 'teacher':
+        teacher_classes = AcademicClass.objects.filter(teacher=request.user).select_related('faculty')
+        records = records.filter(student__academic_class__in=teacher_classes)
+
     if faculty_id:
         records = records.filter(student__faculty_id=faculty_id)
     if class_id:
         records = records.filter(student__academic_class_id=class_id)
     if search:
         records = records.filter(student__full_name__icontains=search)
-
-    # Restrict teacher to their classes
-    if request.user.role == 'teacher':
-        records = records.filter(student__academic_class__teacher=request.user)
 
     summary = {
         'total': records.count(),
@@ -932,8 +968,12 @@ def daily_report(request):
         'informed': records.filter(status='informed').count(),
     }
 
-    faculties = Faculty.objects.all()
-    classes = AcademicClass.objects.all()
+    if request.user.role == 'teacher':
+        faculties = Faculty.objects.filter(classes__in=teacher_classes).distinct()
+        classes = teacher_classes
+    else:
+        faculties = Faculty.objects.all()
+        classes = AcademicClass.objects.all()
 
     return render(request, 'attendance/daily_report.html', {
         'records': records,
@@ -984,8 +1024,13 @@ def monthly_report(request):
             'percentage': percentage,
         })
 
-    faculties = Faculty.objects.all()
-    classes = AcademicClass.objects.all()
+    if request.user.role == 'teacher':
+        teacher_classes = AcademicClass.objects.filter(teacher=request.user).select_related('faculty')
+        faculties = Faculty.objects.filter(classes__in=teacher_classes).distinct()
+        classes = teacher_classes
+    else:
+        faculties = Faculty.objects.all()
+        classes = AcademicClass.objects.all()
 
     return render(request, 'attendance/monthly_report.html', {
         'report_data': report_data,
@@ -1002,6 +1047,20 @@ def monthly_report(request):
 def attendance_logs(request, pk):
     """View audit logs for an attendance record."""
     attendance = get_object_or_404(Attendance, pk=pk)
+
+    if request.user.role == 'teacher' and attendance.student.academic_class.teacher_id != request.user.id:
+        messages.error(request, 'You can only view logs for your own classes.')
+        return redirect('attendance:teacher_dashboard')
+
+    if request.user.role == 'student':
+        if attendance.student.user_id != request.user.id:
+            messages.error(request, 'You can only view your own attendance logs.')
+            return redirect('attendance:student_dashboard')
+
+    if request.user.role not in ['admin', 'teacher', 'student']:
+        messages.error(request, 'You do not have permission to view attendance logs.')
+        return redirect('home')
+
     logs = attendance.logs.all()
     return render(request, 'attendance/logs.html', {
         'attendance': attendance,
@@ -1019,7 +1078,22 @@ def api_attendance_list(request):
     class_id = request.query_params.get('class_id')
     faculty_id = request.query_params.get('faculty_id')
 
-    qs = Attendance.objects.filter(date=date).select_related('student')
+    qs = Attendance.objects.filter(date=date).select_related(
+        'student',
+        'student__academic_class',
+        'student__faculty',
+        'marked_by',
+    )
+
+    if request.user.role == 'teacher':
+        qs = qs.filter(student__academic_class__teacher=request.user)
+    elif request.user.role == 'student':
+        try:
+            qs = qs.filter(student=request.user.student_profile)
+        except Student.DoesNotExist:
+            qs = Attendance.objects.none()
+    elif request.user.role != 'admin':
+        return Response({'error': 'Access denied'}, status=403)
 
     if class_id:
         qs = qs.filter(student__academic_class_id=class_id)
@@ -1042,10 +1116,16 @@ def api_manual_mark_attendance(request):
     if not student_id:
         return Response({'error': 'student_id required'}, status=400)
 
+    if request.user.role not in ['admin', 'teacher']:
+        return Response({'error': 'Only admin or teacher can mark attendance manually.'}, status=403)
+
     try:
         student = Student.objects.get(id=student_id, is_active=True)
     except Student.DoesNotExist:
         return Response({'error': 'Student not found'}, status=404)
+
+    if request.user.role == 'teacher' and student.academic_class.teacher_id != request.user.id:
+        return Response({'error': 'You can only mark attendance for your own class students.'}, status=403)
 
     att, created = Attendance.objects.update_or_create(
         student=student,
@@ -1075,8 +1155,23 @@ def api_manual_mark_attendance(request):
 def api_dashboard_data(request):
     """API: Dashboard summary data."""
     today = timezone.localdate()
-    total_students = Student.objects.filter(is_active=True).count()
-    today_att = Attendance.objects.filter(date=today)
+    if request.user.role == 'admin':
+        student_scope = Student.objects.filter(is_active=True)
+        today_att = Attendance.objects.filter(date=today)
+    elif request.user.role == 'teacher':
+        student_scope = Student.objects.filter(is_active=True, academic_class__teacher=request.user)
+        today_att = Attendance.objects.filter(date=today, student__in=student_scope)
+    elif request.user.role == 'student':
+        try:
+            student_scope = Student.objects.filter(pk=request.user.student_profile.pk)
+            today_att = Attendance.objects.filter(date=today, student=request.user.student_profile)
+        except Student.DoesNotExist:
+            student_scope = Student.objects.none()
+            today_att = Attendance.objects.none()
+    else:
+        return Response({'error': 'Access denied'}, status=403)
+
+    total_students = student_scope.count()
 
     data = {
         'date': today.isoformat(),

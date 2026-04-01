@@ -24,5 +24,6 @@ urlpatterns = [
     path('students/enroll/', views.student_enroll, name='student_enroll'),
     path('students/enroll/webcam/', views.student_enroll_webcam, name='student_enroll_webcam'),
     path('students/<int:pk>/edit/', views.student_edit, name='student_edit'),
+    path('students/<int:pk>/toggle-phone-flag/', views.student_toggle_phone_flag, name='student_toggle_phone_flag'),
     path('students/<int:pk>/delete/', views.student_delete, name='student_delete'),
 ]

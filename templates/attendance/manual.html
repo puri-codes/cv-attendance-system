@@ -36,6 +36,7 @@
 
         <form method="post">
             {% csrf_token %}
+            <input type="hidden" name="class_id" value="{{ selected_class.pk }}">
             <input type="hidden" name="date" value="{{ selected_date }}">
 
             <div class="table-container">

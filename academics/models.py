@@ -56,6 +56,10 @@ class Student(models.Model):
     academic_class = models.ForeignKey(AcademicClass, on_delete=models.CASCADE, related_name='students')
     phone = models.CharField(max_length=20, blank=True)
     guardian_phone = models.CharField(max_length=20, blank=True)
+    is_phone_flagged = models.BooleanField(
+        default=False,
+        help_text='Mark this when the student phone number is incorrect.',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
